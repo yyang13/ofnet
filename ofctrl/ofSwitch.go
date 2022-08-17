@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	heartbeatInterval, _ = time.ParseDuration("3s")
+	heartbeatInterval, _ = time.ParseDuration("5s")
 )
 
 type OFSwitch struct {
@@ -59,7 +59,6 @@ type OFSwitch struct {
 	mQueue         chan *openflow15.MultipartRequest
 	monitorEnabled bool
 	lastUpdate     time.Time // time at that receiving the last EchoReply
-	heartbeatCh    chan struct{}
 	// map for receiving reply messages from OFSwitch. Key is Xid, and value is a chan created by request message sender.
 	txChans map[uint32]chan MessageResult
 	txLock  sync.Mutex         // lock for txChans
@@ -81,8 +80,8 @@ func init() {
 // Builds and populates a Switch struct then starts listening
 // for OpenFlow messages on conn.
 func NewSwitch(stream *util.MessageStream, dpid net.HardwareAddr, app AppInterface, connCh chan int, ctrlID uint16) *OFSwitch {
-	var s *OFSwitch
-	if getSwitch(dpid) == nil {
+	s := getSwitch(dpid)
+	if s == nil {
 		log.Infoln("Openflow Connection for new switch:", dpid)
 
 		s = new(OFSwitch)
@@ -93,31 +92,20 @@ func NewSwitch(stream *util.MessageStream, dpid net.HardwareAddr, app AppInterfa
 		s.txChans = make(map[uint32]chan MessageResult)
 		s.ctrlID = ctrlID
 
-		// Prepare a context for current connection.
-		s.ctx, s.cancel = context.WithCancel(context.Background())
-
 		// Initialize the fgraph elements
 		s.initFgraph()
 
 		// Save it
 		switchDb.Set(dpid.String(), s)
 
-		// Main receive loop for the switch
-		go s.receive()
-
 	} else {
-		log.Infoln("Openflow Connection for switch:", dpid)
-		s = getSwitch(dpid)
+		log.Infoln("Openflow re-connection for switch:", dpid)
 		s.stream = stream
 		s.dpid = dpid
-		// Update context for the new connection.
-		s.ctx, s.cancel = context.WithCancel(context.Background())
 	}
+	// Prepare a context for current connection.
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.tlvMgr = newTLVMapMgr()
-	// send Switch connected callback
-	s.switchConnected()
-
-	// Return the new switch
 	return s
 }
 
@@ -149,7 +137,7 @@ func (self *OFSwitch) Send(req util.Message) error {
 
 func (self *OFSwitch) Disconnect() {
 	self.stream.Shutdown <- true
-	self.switchDisconnected()
+	self.switchDisconnected(false)
 }
 
 func (self *OFSwitch) changeStatus(status bool) {
@@ -165,40 +153,56 @@ func (self *OFSwitch) IsReady() bool {
 }
 
 // Handle switch connected event
-func (self *OFSwitch) switchConnected() {
-	self.changeStatus(true)
-
-	// Send new feature request
-	self.Send(openflow15.NewFeaturesRequest())
-
-	self.Send(openflow15.NewEchoRequest())
-
-	self.heartbeatCh = make(chan struct{})
+func (self *OFSwitch) switchConnected() error {
+	if err := self.clearGroups(); err != nil {
+		return fmt.Errorf("fails to clear groups: %v", err)
+	}
+	// Main receive loop for the switch
+	go self.receive()
+	// Periodically sends echo request message on the connection.
 	go func() {
 		timer := time.NewTicker(heartbeatInterval)
 		defer timer.Stop()
 		for {
 			select {
 			case <-timer.C:
-				self.Send(openflow15.NewEchoRequest())
-			case <-self.heartbeatCh:
-				break
+				if err := self.Send(openflow15.NewEchoRequest()); err != nil {
+					log.Errorf("Failed to send echo request, and retry after %s: %v", heartbeatInterval.String(), err)
+				}
+			case <-self.ctx.Done():
+				log.Infof("Canceling sending echo request on the connection because switch is diconnected")
+				return
 			}
 		}
 	}()
-	self.requestTlvMap()
+	if err := self.requestTlvMap(); err != nil {
+		log.Errorf("Failed to query tlv-map configurations on the OpenFlow switch: %v", err)
+		return err
+	}
+	// Send SwitchConfig message.
+	swConfig := openflow15.NewSetConfig()
+	swConfig.MissSendLen = 128
+	if err := self.Send(swConfig); err != nil {
+		log.Errorf("Failed to set switch config: %v", err)
+		return err
+	}
+	// Set controller ID on the Switch.
+	if err := self.Send(openflow15.NewSetControllerID(self.ctrlID)); err != nil {
+		log.Errorf("Failed to set controller ID: %v", err)
+		return err
+	}
+	self.changeStatus(true)
 	self.app.SwitchConnected(self)
-
+	return nil
 }
 
 // Handle switch disconnected event
-func (self *OFSwitch) switchDisconnected() {
+func (self *OFSwitch) switchDisconnected(reconnect bool) {
 	self.changeStatus(false)
 	self.cancel()
-	self.heartbeatCh <- struct{}{}
 	switchDb.Remove(self.DPID().String())
 	self.app.SwitchDisconnected(self)
-	if self.connCh != nil {
+	if reconnect && self.connCh != nil {
 		self.connCh <- ReConnection
 	}
 }
@@ -215,7 +219,7 @@ func (self *OFSwitch) receive() {
 			log.Warnf("Received ERROR message from switch %v. Err: %v", self.dpid, err)
 
 			// send Switch disconnected callback
-			self.switchDisconnected()
+			self.switchDisconnected(true)
 			return
 		}
 	}
@@ -230,16 +234,16 @@ func (self *OFSwitch) handleMessages(dpid net.HardwareAddr, msg util.Message) {
 		switch t.Header().Type {
 		case openflow15.Type_Hello:
 			// Send Hello response
-			h, err := common.NewHello(4)
-			if err != nil {
-				log.Errorf("Error creating hello message")
+			h, _ := common.NewHello(6)
+			if err := self.Send(h); err != nil {
+				log.Errorf("Error sending hello message")
 			}
-			self.Send(h)
-
 		case openflow15.Type_EchoRequest:
 			// Send echo reply
 			res := openflow15.NewEchoReply()
-			self.Send(res)
+			if err := self.Send(res); err != nil {
+				log.Errorf("Failed to send echo reply: %v", err)
+			}
 
 		case openflow15.Type_EchoReply:
 			self.lastUpdate = time.Now()
@@ -299,15 +303,6 @@ func (self *OFSwitch) handleMessages(dpid net.HardwareAddr, msg util.Message) {
 		self.publishMessage(t.BundleId, result)
 
 	case *openflow15.SwitchFeatures:
-		switch t.Header.Type {
-		case openflow15.Type_FeaturesReply:
-			go func() {
-				swConfig := openflow15.NewSetConfig()
-				swConfig.MissSendLen = 128
-				self.Send(swConfig)
-				self.Send(openflow15.NewSetControllerID(self.ctrlID))
-			}()
-		}
 
 	case *openflow15.SwitchConfig:
 		switch t.Header.Type {
@@ -493,7 +488,7 @@ func (self *OFSwitch) unSubscribeMessage(xID uint32) {
 
 func (self *OFSwitch) sendModPortMessage(port int, mac net.HardwareAddr, config int, mask int) error {
 	msg := openflow15.NewPortMod(port)
-	msg.Header.Version = 0x4
+	msg.Header.Version = 0x6
 	msg.HWAddr = mac
 	msg.Config = uint32(config)
 	msg.Mask = uint32(mask)

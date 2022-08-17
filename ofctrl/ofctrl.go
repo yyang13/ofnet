@@ -152,6 +152,7 @@ func (c *Controller) Connect(sock string) error {
 			conn.Close()
 		}
 	}()
+	var err error
 
 	// Parse retry configuration.
 	var maxRetry = maxRetryForConnection
@@ -176,7 +177,7 @@ func (c *Controller) Connect(sock string) error {
 				}
 
 				// Retry to connect to the switch if hit error.
-				conn, err := c.getConnection(sock, maxRetry, retryInterval)
+				conn, err = c.getConnection(sock, maxRetry, retryInterval)
 
 				if err != nil {
 					return err
@@ -236,7 +237,7 @@ func (c *Controller) Delete() {
 
 // Handle TCP connection from the switch
 func (c *Controller) handleConnection(conn net.Conn) {
-	var connFlag int = CompleteConnection
+	var connFlag = ReConnection
 	defer func() {
 		c.connCh <- connFlag
 	}()
@@ -248,12 +249,12 @@ func (c *Controller) handleConnection(conn net.Conn) {
 	log.Println("New connection..")
 
 	// Send ofp 1.5 Hello by default
-	h, err := common.NewHello(6)
-	if err != nil {
+	h, _ := common.NewHello(6)
+	if err := sendMessageWithTimeout(stream, h); err != nil {
+		log.Errorf("Failed to send HELLO message")
 		return
 	}
-	log.Printf("Send hello with OF version: %d", h.Version)
-	stream.Outbound <- h
+	log.Printf("Sent hello with OF version: %d", h.Version)
 
 	for {
 		select {
@@ -262,16 +263,19 @@ func (c *Controller) handleConnection(conn net.Conn) {
 			// A Hello message of the appropriate type
 			// completes version negotiation. If version
 			// types are incompatible, it is possible the
-			// connection may be servered without error.
+			// connection may be served without error.
 			case *common.Hello:
 				if m.Version == openflow15.VERSION {
 					log.Infoln("Received Openflow 1.5 Hello message")
 					// Version negotiation is
 					// considered complete. Create
-					// new Switch and notifiy listening
+					// new Switch and notify listening
 					// applications.
 					stream.Version = m.Version
-					stream.Outbound <- openflow15.NewFeaturesRequest()
+					if err := sendMessageWithTimeout(stream, openflow15.NewFeaturesRequest()); err != nil {
+						log.Errorf("Failed to send FeatureRequest message")
+						return
+					}
 				} else {
 					// Connection should be severed if controller
 					// doesn't support switch version.
@@ -289,8 +293,15 @@ func (c *Controller) handleConnection(conn net.Conn) {
 				if c.connectMode == ClientMode {
 					reConnChan = c.connCh
 				}
-				NewSwitch(stream, m.DPID, c.app, reConnChan, c.id)
-
+				s := NewSwitch(stream, m.DPID, c.app, reConnChan, c.id)
+				if err := s.switchConnected(); err != nil {
+					log.Errorf("Failed to initialize OpenFlow switch %s: %v", m.DPID, err)
+					// Do not send event "ReConnection" in "switchDisconnected", because the event is sent in
+					// defer logic in "handleConnection".
+					s.switchDisconnected(false)
+					return
+				}
+				connFlag = CompleteConnection
 				// Let switch instance handle all future messages..
 				return
 
@@ -299,18 +310,17 @@ func (c *Controller) handleConnection(conn net.Conn) {
 			case *openflow15.ErrorMsg:
 				log.Warnf("Received OpenFlow error msg: %+v", *m)
 				stream.Shutdown <- true
+				return
 			}
 		case err := <-stream.Error:
 			// The connection has been shutdown.
 			log.Println(err)
-			connFlag = ReConnection
 			return
 		case <-time.After(heartbeatInterval):
 			// This shouldn't happen. If it does, both the controller
 			// and switch are no longer communicating. The TCPConn is
 			// still established though.
 			log.Warnln("Connection timed out.")
-			connFlag = ReConnection
 			return
 		}
 	}
@@ -325,4 +335,13 @@ func (c *Controller) Parse(b []byte) (message util.Message, err error) {
 		log.Errorf("Received unsupported OpenFlow version: %d", b[0])
 	}
 	return
+}
+
+func sendMessageWithTimeout(stream *util.MessageStream, msg util.Message) error {
+	select {
+	case <-time.After(messageTimeout):
+		return fmt.Errorf("message send timeout")
+	case stream.Outbound <- msg:
+		return nil
+	}
 }

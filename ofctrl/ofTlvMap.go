@@ -2,6 +2,7 @@ package ofctrl
 
 import (
 	"fmt"
+	"time"
 
 	"antrea.io/libOpenflow/openflow15"
 )
@@ -142,16 +143,26 @@ func (s *OFSwitch) requestTlvMap() error {
 		return nil
 	}
 	msg := openflow15.NewTLVTableRequest()
-	err := s.Send(msg)
+
+	var err error
+	err = s.Send(msg)
 	if err != nil {
 		return err
 	}
-	<-s.tlvMgr.tlvCh
-	return nil
+
+	select {
+	case <-s.tlvMgr.tlvCh:
+		return nil
+	case <-time.After(messageTimeout):
+		err = fmt.Errorf("tlv-map request is not replied on switch %s in 10s", s.dpid.String())
+	case <-s.ctx.Done():
+		err = fmt.Errorf("cancel the wait for tlv-map reply because switch %s is diconnected", s.dpid.String())
+	}
+	return err
 }
 
 func newTLVMapMgr() *tlvMapMgr {
 	mgr := new(tlvMapMgr)
-	mgr.tlvCh = make(chan struct{})
+	mgr.tlvCh = make(chan struct{}, 1)
 	return mgr
 }

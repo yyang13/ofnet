@@ -23,7 +23,7 @@ import (
 )
 
 // Initialize the fgraph elements on the switch
-func (self *OFSwitch) initFgraph() error {
+func (self *OFSwitch) initFgraph() {
 	// Create the DBs
 	self.tableDb = make(map[uint8]*Table)
 	self.groupDb = make(map[uint32]*Group)
@@ -54,13 +54,6 @@ func (self *OFSwitch) initFgraph() error {
 	normalLookup.outputType = "normal"
 	normalLookup.portNo = openflow15.P_NORMAL
 	self.normalLookup = normalLookup
-
-	// Clear all existing flood lists
-	groupMod := openflow15.NewGroupMod()
-	groupMod.GroupId = openflow15.OFPG_ALL
-	groupMod.Command = openflow15.OFPGC_DELETE
-	groupMod.Type = openflow15.GT_ALL
-	return self.Send(groupMod)
 }
 
 // Create a new table. return an error if it already exists
@@ -207,4 +200,13 @@ func (self *OFSwitch) NewFlood() (*Flood, error) {
 	flood.install()
 
 	return flood, nil
+}
+
+// clearGroups clears all existing groups.
+func (self *OFSwitch) clearGroups() error {
+	groupMod := openflow15.NewGroupMod()
+	groupMod.GroupId = openflow15.OFPG_ALL
+	groupMod.Command = openflow15.OFPGC_DELETE
+	groupMod.Type = openflow15.GT_ALL
+	return self.Send(groupMod)
 }
