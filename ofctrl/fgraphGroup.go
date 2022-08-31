@@ -109,6 +109,10 @@ func (self *Group) getGroupModMessage(command int) *openflow15.GroupMod {
 		// Add the bucket to group
 		groupMod.AddBucket(*bkt)
 	}
+
+	if command == openflow15.OFPGC_INSERT_BUCKET {
+		groupMod.CommandBucketId = openflow15.OFPG_BUCKET_LAST
+	}
 	groupMod.Command = uint16(command)
 	return groupMod
 }
