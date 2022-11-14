@@ -804,7 +804,7 @@ func GetUint64ValueWithRangeFromBytes(data []byte, rng *openflow15.NXRange) (uin
 }
 
 type PortField struct {
-	port uint16
+	Port uint16
 }
 
 func (m *PortField) Len() uint16 {
@@ -812,17 +812,17 @@ func (m *PortField) Len() uint16 {
 }
 func (m *PortField) MarshalBinary() (data []byte, err error) {
 	data = make([]byte, m.Len())
-	binary.BigEndian.PutUint16(data, m.port)
+	binary.BigEndian.PutUint16(data, m.Port)
 	return
 }
 
 func (m *PortField) UnmarshalBinary(data []byte) error {
-	m.port = binary.BigEndian.Uint16(data)
+	m.Port = binary.BigEndian.Uint16(data)
 	return nil
 }
 
 type ProtocolField struct {
-	protocol uint8
+	Protocol uint8
 }
 
 func (m *ProtocolField) Len() uint16 {
@@ -830,11 +830,11 @@ func (m *ProtocolField) Len() uint16 {
 }
 func (m *ProtocolField) MarshalBinary() (data []byte, err error) {
 	data = make([]byte, 1)
-	data[0] = m.protocol
+	data[0] = m.Protocol
 	return
 }
 
 func (m *ProtocolField) UnmarshalBinary(data []byte) error {
-	m.protocol = data[0]
+	m.Protocol = data[0]
 	return nil
 }

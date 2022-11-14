@@ -527,7 +527,7 @@ func (self *Flow) xlateMatch() openflow15.Match {
 
 	if self.Match.CtIpProto > 0 {
 		ctIPProtoField, _ := openflow15.FindFieldHeaderByName("NXM_NX_CT_NW_PROTO", false)
-		ctIPProtoField.Value = &ProtocolField{protocol: self.Match.CtIpProto}
+		ctIPProtoField.Value = &ProtocolField{Protocol: self.Match.CtIpProto}
 		ofMatch.AddField(*ctIPProtoField)
 	}
 
@@ -545,13 +545,13 @@ func (self *Flow) xlateMatch() openflow15.Match {
 
 	if self.Match.CtTpSrcPort > 0 {
 		ctTpSrcPortField, _ := openflow15.FindFieldHeaderByName("NXM_NX_CT_TP_SRC", false)
-		ctTpSrcPortField.Value = &PortField{port: self.Match.CtTpSrcPort}
+		ctTpSrcPortField.Value = &PortField{Port: self.Match.CtTpSrcPort}
 		ofMatch.AddField(*ctTpSrcPortField)
 	}
 
 	if self.Match.CtTpDstPort > 0 {
 		ctTpDstPortField, _ := openflow15.FindFieldHeaderByName("NXM_NX_CT_TP_DST", false)
-		ctTpDstPortField.Value = &PortField{port: self.Match.CtTpDstPort}
+		ctTpDstPortField.Value = &PortField{Port: self.Match.CtTpDstPort}
 		ofMatch.AddField(*ctTpDstPortField)
 	}
 
