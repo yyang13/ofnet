@@ -2,6 +2,7 @@
 package ofctrl
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"net"
@@ -123,18 +124,6 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 	dstPort := uint16(1234)
 
 	table0 := ofSwitch.DefaultTable()
-	table1 := ofApp.nextTable
-	flow0 := &Flow{
-		Table: table0,
-		Match: FlowMatch{
-			Priority: 100,
-		},
-	}
-	flow0.ApplyActions([]OFAction{
-		NewResubmit(nil, &table1.TableId),
-	})
-	flow0.Send(openflow15.FC_ADD)
-
 	var ethertype uint16
 	if ipv6 {
 		ethertype = protocol.IPv6_MSG
@@ -143,7 +132,7 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 	}
 
 	flow1 := &Flow{
-		Table: table1,
+		Table: table0,
 		Match: FlowMatch{
 			Priority:  100,
 			Ethertype: ethertype,
@@ -152,18 +141,14 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 			IpSa:      &srcIP,
 			IpDa:      &dstIP,
 			IpProto:   IP_PROTO_TCP,
-			DstPort:   dstPort,
 		},
 	}
 	rng0 := openflow15.NewNXRange(0, 15)
 	rng1 := openflow15.NewNXRange(16, 31)
 	rng2 := openflow15.NewNXRange(8, 23)
-	act1, err := NewNXLoadAction("NXM_NX_REG0", uint64(0x1234), rng0)
-	require.Nil(t, err)
-	act2, err := NewNXLoadAction("NXM_NX_REG0", uint64(0x5678), rng1)
-	require.Nil(t, err)
-	act3, err := NewNXLoadAction("NXM_NX_REG1", uint64(0xaaaa), rng2)
-	require.Nil(t, err)
+	act1 := actionToLoadDataToReg(0, 0x1234, rng0)
+	act2 := actionToLoadDataToReg(0, 0x5678, rng1)
+	act3 := actionToLoadDataToReg(1, 0xaaaa, rng2)
 	var expectTunDst net.IP
 	if ipv6 {
 		expectTunDst = net.ParseIP("2000::10")
@@ -175,8 +160,7 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 	flow1.ApplyActions([]OFAction{act1, act2, act3, act5, cxControllerAct})
 	flow1.Send(openflow15.FC_ADD)
 
-	act4, err := NewNXLoadAction("NXM_NX_REG3", uint64(0xaaaa), rng2)
-	require.NoError(t, err)
+	act4 := actionToLoadDataToReg(3, 0xaaaa, rng2)
 	packetOut := generateTCPPacketOut(srcMAC, dstMAC, srcIP, dstIP, dstPort, 0, nil, []OFAction{act4})
 	if ipv6 {
 		assert.NotNil(t, packetOut.IPv6Header)
@@ -195,7 +179,7 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 		t.Fatalf("PacketIn timeout")
 	}
 	matchers := pktIn.GetMatches()
-	reg0Match := matchers.GetMatchByName("NXM_NX_REG0")
+	reg0Match := getMatchFieldByRegID(matchers, 0)
 	assert.NotNil(t, reg0Match)
 	reg0Value, ok := reg0Match.GetValue().(*NXRegister)
 	assert.True(t, ok)
@@ -203,13 +187,13 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 	assert.Equal(t, uint32(0x1234), reg0prev)
 	reg0last := GetUint32ValueWithRange(reg0Value.Data, rng1)
 	assert.Equal(t, uint32(0x5678), reg0last)
-	reg1Match := matchers.GetMatchByName("NXM_NX_REG1")
+	reg1Match := getMatchFieldByRegID(matchers, 1)
 	assert.NotNil(t, reg1Match)
 	reg1Value, ok := reg1Match.GetValue().(*NXRegister)
 	assert.True(t, ok)
 	reg1prev := GetUint32ValueWithRange(reg1Value.Data, rng2)
 	assert.Equal(t, uint32(0xaaaa), reg1prev)
-	reg2Match := matchers.GetMatchByName("NXM_NX_REG2")
+	reg2Match := getMatchFieldByRegID(matchers, 2)
 	assert.Nil(t, reg2Match)
 	var tunDstMatch *MatchField
 	if ipv6 {
@@ -220,10 +204,13 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 	assert.NotNil(t, tunDstMatch)
 	tunDst := tunDstMatch.GetValue().(net.IP)
 	assert.Equal(t, expectTunDst, tunDst)
+	ethData := new(protocol.Ethernet)
+	err := ethData.UnmarshalBinary(pktIn.Data.(*util.Buffer).Bytes())
+	assert.NoError(t, err)
 	if ipv6 {
-		assert.Equal(t, uint16(protocol.IPv6_MSG), pktIn.Data.(*protocol.Ethernet).Ethertype)
+		assert.Equal(t, uint16(protocol.IPv6_MSG), ethData.Ethertype)
 		var ipv6Obj protocol.IPv6
-		ipv6Bytes, err := pktIn.Data.(*protocol.Ethernet).Data.(*protocol.IPv6).MarshalBinary()
+		ipv6Bytes, err := ethData.Data.(*protocol.IPv6).MarshalBinary()
 		assert.Nil(t, err)
 		assert.Nil(t, ipv6Obj.UnmarshalBinary(ipv6Bytes))
 		assert.Equal(t, srcIP, ipv6Obj.NWSrc)
@@ -233,8 +220,38 @@ func testPacketInOut(t *testing.T, ofApp *packetApp, brName string, ipv6 bool) {
 		assert.Nil(t, tcpObj.UnmarshalBinary(ipv6Obj.Data.(*util.Buffer).Bytes()))
 		assert.Equal(t, dstPort, tcpObj.PortDst)
 	} else {
-		assert.Equal(t, dstIP.To4(), pktIn.Data.(*protocol.Ethernet).Data.(*protocol.IPv4).NWDst)
+		assert.Equal(t, dstIP.To4(), ethData.Data.(*protocol.IPv4).NWDst)
 	}
+}
+
+func actionToLoadDataToReg(regID int, valueData uint32, rng *openflow15.NXRange) OFAction {
+	mask := uint32(0)
+	if rng != nil {
+		mask = ^mask >> (32 - rng.GetNbits()) << rng.GetOfs()
+		valueData = valueData << rng.GetOfs()
+	}
+	f := openflow15.NewRegMatchFieldWithMask(regID, valueData, mask)
+	return NewSetFieldAction(f)
+}
+
+func getMatchFieldByRegID(matchers *Matchers, regID int) *MatchField {
+	xregID := uint8(regID / 2)
+	startBit := 4 * (regID % 2)
+	f := matchers.GetMatch(openflow15.OXM_CLASS_PACKET_REGS, xregID)
+	if f == nil {
+		return nil
+	}
+	dataBytes := f.Value.(*openflow15.ByteArrayField).Data
+	data := binary.BigEndian.Uint32(dataBytes[startBit : startBit+4])
+	var mask uint32
+	if f.HasMask {
+		maskBytes, _ := f.Mask.MarshalBinary()
+		mask = binary.BigEndian.Uint32(maskBytes[startBit : startBit+4])
+	}
+	if data == 0 && mask == 0 {
+		return nil
+	}
+	return &MatchField{MatchField: openflow15.NewRegMatchFieldWithMask(regID, data, mask)}
 }
 
 func generateTCPPacketOut(srcMAC, dstMAC net.HardwareAddr, srcIP net.IP, dstIP net.IP, dstPort, srcPort uint16, outputPort *uint32, actions []OFAction) *PacketOut {

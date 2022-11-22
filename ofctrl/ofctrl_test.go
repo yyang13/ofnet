@@ -80,7 +80,7 @@ var ovsDriver *OvsDriver
 
 // Run an ovs-ofctl command
 func runOfctlCmd(cmd, brName string) ([]byte, error) {
-	cmdStr := fmt.Sprintf("sudo /usr/bin/ovs-ofctl -O Openflow15 %s %s", cmd, brName)
+	cmdStr := fmt.Sprintf("/usr/bin/ovs-ofctl -O OpenFlow15 %s %s", cmd, brName)
 	out, err := exec.Command("/bin/sh", "-c", cmdStr).Output()
 	if err != nil {
 		log.Errorf("error running ovs-ofctl %s %s. Error: %v", cmd, brName, err)
@@ -2123,11 +2123,16 @@ func testNXExtensionsWithOFApplication(ofApp *OfActor, ovsBr *OvsDriver, t *test
 func verifyNewFlowInstallAndDelete(t *testing.T, flow *Flow, br string, tableID uint8, matchStr string, actionStr string) {
 	err := flow.Send(openflow15.FC_ADD)
 	assert.NoError(t, err, "Error installing flow")
-	time.Sleep(11 * time.Second)
 	flow.MonitorRealizeStatus()
-	// verify metadata action exists
-	assert.Truef(t, ofctlDumpFlowMatch(br, int(tableID), matchStr, actionStr), "br: %s, target flow not found on OVS, match: %s, actions: %s", br, matchStr, actionStr)
-	assert.Truef(t, flow.IsRealized(), "Failed to realize flow status, match: %s, actions: %s", matchStr, actionStr)
+	assert.Eventually(t, func() bool {
+		if !ofctlDumpFlowMatch(br, int(tableID), matchStr, actionStr) {
+			return false
+		}
+		if !flow.IsRealized() {
+			return false
+		}
+		return true
+	}, time.Second*10, time.Millisecond*500, "Failed to install flow with match %s. action %s", matchStr, actionStr)
 
 	// delete the flow
 	err = flow.Send(openflow15.FC_DELETE_STRICT)
@@ -2142,10 +2147,15 @@ func verifyFlowInstallAndDelete(t *testing.T, flow *Flow, nextElem FgraphElem, b
 	err := flow.Next(nextElem)
 	assert.NoError(t, err, "Error install flow")
 	flow.MonitorRealizeStatus()
-	time.Sleep(8 * time.Second)
-	// verify metadata action exists
-	assert.Truef(t, ofctlDumpFlowMatch(br, int(tableID), matchStr, actionStr), "br: %s, target flow not found on OVS, match: %s, actions: %s", br, matchStr, actionStr)
-	assert.Truef(t, flow.IsRealized(), "Failed to realize flow status, match: %s, actions: %s", matchStr, actionStr)
+	assert.Eventually(t, func() bool {
+		if !ofctlDumpFlowMatch(br, int(tableID), matchStr, actionStr) {
+			return false
+		}
+		if !flow.IsRealized() {
+			return false
+		}
+		return true
+	}, time.Second*10, time.Millisecond*100, "Failed to install flow with match %s. action %s", matchStr, actionStr)
 
 	// delete the flow
 	err = flow.Delete()
@@ -2208,15 +2218,14 @@ func TestWriteactionsFlows(t *testing.T) {
 	}
 
 	rng1 := openflow15.NewNXRange(16, 16)
-	loadReg1, err := NewNXLoadAction("NXM_NX_REG0", uint64(1), rng1)
-	require.NoError(t, err)
+	loadReg1 := actionToLoadDataToReg(0, 1, rng1)
 	flow1.ApplyActions([]OFAction{loadReg1})
 	outputAction1 := NewOutputPort(uint32(1))
 	flow1.WriteActions([]OFAction{outputAction1})
 	flow1.Goto(ofActor.nextTable.TableId)
 	verifyNewFlowInstallAndDelete(t, flow1, brName, ofActor.inputTable.TableId,
 		"priority=200,ip,nw_dst=10.96.0.0/12",
-		"load:0x1->NXM_NX_REG0[16],write_actions(output:1),goto_table:1")
+		"set_field:0x10000/0x10000->reg0,write_actions(output:1),goto_table:1")
 
 	// Test l3ForwardingTable flow using write_actions
 	ipDa2 := net.ParseIP("172.30.0.0")
@@ -2239,7 +2248,7 @@ func TestWriteactionsFlows(t *testing.T) {
 	dstMacAction2 := &SetDstMACAction{MAC: dstMac2}
 
 	rng2 := openflow15.NewNXRange(16, 16)
-	loadReg2, err := NewNXLoadAction("NXM_NX_REG0", uint64(1), rng2)
+	loadReg2 := actionToLoadDataToReg(0, 1, rng2)
 
 	ipTunnelDa2 := net.ParseIP("192.168.20.1")
 	tunnelDstAction := &SetTunnelDstAction{IP: ipTunnelDa2}
@@ -2249,10 +2258,9 @@ func TestWriteactionsFlows(t *testing.T) {
 	outputAction2 := NewOutputPort(uint32(1))
 	flow2.WriteActions([]OFAction{outputAction2})
 	flow2.Goto(ofActor.nextTable.TableId)
-	require.NoError(t, err)
 	verifyNewFlowInstallAndDelete(t, flow2, brName, ofActor.inputTable.TableId,
 		"priority=200,ip,nw_dst=172.30.0.0/24",
-		"dec_ttl,set_field:11:11:11:11:11:11->eth_src,set_field:aa:bb:cc:dd:ee:ff->eth_dst,load:0x1->NXM_NX_REG0[16],set_field:192.168.20.1->tun_dst,write_actions(output:1),goto_table:1")
+		"dec_ttl,set_field:11:11:11:11:11:11->eth_src,set_field:aa:bb:cc:dd:ee:ff->eth_dst,set_field:0x10000/0x10000->reg0,set_field:192.168.20.1->tun_dst,write_actions(output:1),goto_table:1")
 
 	// Test l2ForwardingCalcTable flow using write_actions
 	macDa3, _ := net.ParseMAC("11:11:11:11:11:11")
@@ -2266,17 +2274,16 @@ func TestWriteactionsFlows(t *testing.T) {
 	}
 
 	rng3 := openflow15.NewNXRange(16, 16)
-	loadReg3, err := NewNXLoadAction("NXM_NX_REG0", uint64(1), rng3)
+	loadReg3 := actionToLoadDataToReg(0, 1, rng3)
 
 	flow3.ApplyActions([]OFAction{loadReg3})
 
 	outputAction3 := NewOutputPort(uint32(1))
 	flow3.WriteActions([]OFAction{outputAction3})
 	flow3.Goto(ofActor.nextTable.TableId)
-	require.NoError(t, err)
 	verifyNewFlowInstallAndDelete(t, flow3, brName, ofActor.inputTable.TableId,
 		"priority=200,dl_dst=11:11:11:11:11:11",
-		"load:0x1->NXM_NX_REG0[16],write_actions(output:1),goto_table:1")
+		"set_field:0x10000/0x10000->reg0,write_actions(output:1),goto_table:1")
 
 	// Test ingressrule table flow with actset_output
 	actsetOutput4 := uint32(105)
@@ -2287,6 +2294,7 @@ func TestWriteactionsFlows(t *testing.T) {
 			Ethertype:    0x0800,
 			ActsetOutput: actsetOutput4,
 		},
+		CookieID: 1000001,
 	}
 
 	conjunction4, err := NewNXConjunctionAction(uint32(101), uint8(2), uint8(3))
