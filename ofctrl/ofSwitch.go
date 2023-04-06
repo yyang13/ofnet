@@ -25,8 +25,8 @@ import (
 
 	"antrea.io/libOpenflow/common"
 	"antrea.io/libOpenflow/openflow15"
+	"antrea.io/libOpenflow/protocol"
 	"antrea.io/libOpenflow/util"
-
 	log "github.com/sirupsen/logrus"
 	cmap "github.com/streamrail/concurrent-map"
 )
@@ -292,6 +292,10 @@ func (self *OFSwitch) handleMessages(dpid net.HardwareAddr, msg util.Message) {
 			reply := t.VendorData.(*openflow15.TLVTableReply)
 			status := TLVTableStatus(*reply)
 			self.tlvMgr.TLVMapReplyRcvd(self, &status)
+		case openflow15.Type_PacketIn2:
+			pktInMsg := t.VendorData.(*openflow15.PacketIn2)
+			pktIn := parsePacktInFromNXPacketIn2(pktInMsg)
+			self.app.PacketRcvd(self, pktIn)
 		}
 
 	case *openflow15.BundleCtrl:
@@ -314,7 +318,8 @@ func (self *OFSwitch) handleMessages(dpid net.HardwareAddr, msg util.Message) {
 	case *openflow15.PacketIn:
 		log.Debugf("Received packet(ofctrl): %+v", t)
 		// send packet rcvd callback
-		self.app.PacketRcvd(self, (*PacketIn)(t))
+		pktIn := &PacketIn{PacketIn: t}
+		self.app.PacketRcvd(self, pktIn)
 
 	case *openflow15.FlowRemoved:
 
@@ -497,4 +502,86 @@ func (self *OFSwitch) sendModPortMessage(port int, mac net.HardwareAddr, config 
 
 func (self *OFSwitch) GetControllerID() uint16 {
 	return self.ctrlID
+}
+
+func (self *OFSwitch) SetPacketInFormat(format uint32) error {
+	msg := openflow15.NewSetPacketInFormat(format)
+	return self.Send(msg)
+}
+
+func (self *OFSwitch) ResumePacket(pktIn *PacketIn) error {
+	var resumeProps []openflow15.Property
+	if pktIn.Data == nil {
+		return fmt.Errorf("no Ethernet packet in the message")
+	}
+	eth := protocol.NewEthernet()
+	pktBytes, err := pktIn.Data.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if err = eth.UnmarshalBinary(pktBytes); err != nil {
+		return err
+	}
+	packetProp := &openflow15.PacketIn2PropPacket{
+		Packet: *eth,
+		PropHeader: &openflow15.PropHeader{
+			Type: openflow15.NXPINT_PACKET,
+		},
+	}
+	packetProp.Length = packetProp.Len()
+	cookieProp := &openflow15.PacketIn2PropCookie{
+		Cookie: pktIn.Cookie,
+		PropHeader: &openflow15.PropHeader{
+			Type:   openflow15.NXPINT_COOKIE,
+			Length: 16,
+		},
+	}
+	bufferProp := &openflow15.PacketIn2PropBufferID{
+		BufferID: pktIn.BufferId,
+		PropHeader: &openflow15.PropHeader{
+			Type:   openflow15.NXPINT_BUFFER_ID,
+			Length: 8,
+		},
+	}
+	if pktIn.TotalLen > 0 {
+		lenProp := &openflow15.PacketIn2PropFullLen{
+			FullLen: uint32(pktIn.TotalLen),
+			PropHeader: &openflow15.PropHeader{
+				Type:   openflow15.NXPINT_FULL_LEN,
+				Length: 8,
+			},
+		}
+		resumeProps = append(resumeProps, lenProp)
+	}
+	tableProp := &openflow15.PacketIn2PropTableID{
+		TableID: pktIn.TableId,
+		PropHeader: &openflow15.PropHeader{
+			Type:   openflow15.NXPINT_TABLE_ID,
+			Length: 8,
+		},
+	}
+	reasonProp := &openflow15.PacketIn2PropReason{
+		Reason: pktIn.Reason,
+		PropHeader: &openflow15.PropHeader{
+			Type:   openflow15.NXPINT_REASON,
+			Length: 8,
+		},
+	}
+	matchProp := &openflow15.PacketIn2PropMetadata{
+		Fields: pktIn.Match.Fields,
+		PropHeader: &openflow15.PropHeader{
+			Type: openflow15.NXPINT_METADATA,
+		},
+	}
+	matchProp.Length = matchProp.Len()
+	continueProp := &openflow15.PacketIn2PropContinuation{
+		Continuation: pktIn.Continuation,
+		PropHeader: &openflow15.PropHeader{
+			Type: openflow15.NXPINT_CONTINUATION,
+		},
+	}
+	continueProp.Length = continueProp.Len()
+	resumeProps = append(resumeProps, packetProp, cookieProp, bufferProp, tableProp, reasonProp, matchProp, continueProp)
+	resumeMsg := openflow15.NewResume(resumeProps)
+	return self.Send(resumeMsg)
 }

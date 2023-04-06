@@ -651,11 +651,25 @@ func (a *NXNoteAction) GetActionType() string {
 }
 
 type NXController struct {
+	Version2     bool
 	ControllerID uint16
 	Reason       uint8
+	UserData     []byte
+	MeterID      uint32
+	Pause        bool
 }
 
 func (a *NXController) GetActionMessage() openflow15.Action {
+	if a.Version2 {
+		action := openflow15.NewNXActionController2()
+		action.AddControllerID(a.ControllerID)
+		action.AddReason(a.Reason)
+		action.AddUserdata(a.UserData)
+		action.AddMaxLen(128)
+		action.AddMeterID(a.MeterID)
+		action.AddPause(a.Pause)
+		return action
+	}
 	action := openflow15.NewNXActionController(a.ControllerID)
 	action.MaxLen = 128
 	action.Reason = a.Reason
