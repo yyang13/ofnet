@@ -142,10 +142,10 @@ func (self *Group) Delete() error {
 	return self.Switch.DeleteGroup(self.ID)
 }
 
-func newGroup(id uint32, groupType GroupType, ofSwitch *OFSwitch) *Group {
+func NewGroup(groupId uint32, groupType GroupType, sw *OFSwitch) *Group {
 	return &Group{
-		ID:        id,
+		ID:        groupId,
 		GroupType: groupType,
-		Switch:    ofSwitch,
+		Switch:    sw,
 	}
 }

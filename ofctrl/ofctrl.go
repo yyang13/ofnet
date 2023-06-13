@@ -94,6 +94,10 @@ type AppInterface interface {
 
 	// Controller received a multi-part reply from the switch
 	MultipartReply(sw *OFSwitch, rep *openflow15.MultipartReply)
+
+	FlowGraphEnabledOnSwitch() bool
+
+	TLVMapEnabledOnSwitch() bool
 }
 
 type ConnectionRetryControl interface {

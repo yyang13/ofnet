@@ -71,9 +71,7 @@ func (self *OFSwitch) NewTable(tableId uint8) (*Table, error) {
 	}
 
 	// Create a new table
-	table := new(Table)
-	table.Switch = self
-	table.TableId = tableId
+	table := NewTable(tableId, self)
 	table.flowDb = make(map[string]*Flow)
 	// Save it in the DB
 	self.tableDb[tableId] = table
@@ -112,7 +110,7 @@ func (self *OFSwitch) NewGroup(groupId uint32, groupType GroupType) (*Group, err
 	}
 
 	// Create a new group
-	group := newGroup(groupId, groupType, self)
+	group := NewGroup(groupId, groupType, self)
 	// Save it in the DB
 	self.groupDb[groupId] = group
 
@@ -145,7 +143,7 @@ func (self *OFSwitch) NewMeter(meterId uint32, flags MeterFlag) (*Meter, error) 
 	}
 
 	// Create a new meter
-	meter := newMeter(meterId, flags, self)
+	meter := NewMeter(meterId, flags, self)
 	// Save it in the DB
 	self.meterDb[meterId] = meter
 

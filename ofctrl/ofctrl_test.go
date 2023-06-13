@@ -73,6 +73,14 @@ func (o *OfActor) TLVMapReplyRcvd(sw *OFSwitch, tlvTableStatus *TLVTableStatus) 
 	}
 }
 
+func (o *OfActor) FlowGraphEnabledOnSwitch() bool {
+	return true
+}
+
+func (o *OfActor) TLVMapEnabledOnSwitch() bool {
+	return true
+}
+
 // Controller/Application/ovsBr work on clientMode
 var ofActor *OfActor
 var ctrler *Controller
@@ -902,7 +910,7 @@ func TestBundle2(t *testing.T) {
 	assert.Truef(t, found, "Failed to add transaction with ID %d from switch queues", tx.ID)
 
 	groupId := uint32(2)
-	group1 := newGroup(groupId, GroupSelect, ofActor.Switch)
+	group1 := NewGroup(groupId, GroupSelect, ofActor.Switch)
 
 	natAction := openflow15.NewNXActionCTNAT()
 	assert.Nil(t, natAction.SetSNAT(), "Failed to set SNAT action")
@@ -1320,7 +1328,7 @@ func testNewFlowActionAPIsTest12(t *testing.T) {
 
 	// Test group
 	groupId := uint32(11)
-	group1 := newGroup(groupId, GroupSelect, ofActor.Switch)
+	group1 := NewGroup(groupId, GroupSelect, ofActor.Switch)
 
 	natAction := openflow15.NewNXActionCTNAT()
 	assert.Nil(t, natAction.SetSNAT(), "Failed to set SNAT action")
@@ -2068,7 +2076,7 @@ func testNXExtensionsTest13(ofApp *OfActor, ovsBr *OvsDriver, t *testing.T) {
 	brName := ovsBr.OvsBridgeName
 	groupId := uint32(1)
 
-	group1 := newGroup(groupId, GroupSelect, ofApp.Switch)
+	group1 := NewGroup(groupId, GroupSelect, ofApp.Switch)
 
 	natAction := openflow15.NewNXActionCTNAT()
 	assert.Nil(t, natAction.SetSNAT(), "Failed to set SNAT action")

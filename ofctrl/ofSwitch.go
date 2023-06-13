@@ -96,7 +96,9 @@ func NewSwitch(stream *util.MessageStream, dpid net.HardwareAddr, app AppInterfa
 		s.ctrlID = ctrlID
 
 		// Initialize the fgraph elements
-		s.initFgraph()
+		if app.FlowGraphEnabledOnSwitch() {
+			s.initFgraph()
+		}
 
 		// Save it
 		switchDb.Set(dpid.String(), s)
@@ -108,7 +110,9 @@ func NewSwitch(stream *util.MessageStream, dpid net.HardwareAddr, app AppInterfa
 	}
 	// Prepare a context for current connection.
 	s.ctx, s.cancel = context.WithCancel(context.Background())
-	s.tlvMgr = newTLVMapMgr()
+	if app.TLVMapEnabledOnSwitch() {
+		s.tlvMgr = newTLVMapMgr()
+	}
 	return s
 }
 
