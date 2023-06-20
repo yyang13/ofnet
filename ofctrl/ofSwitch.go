@@ -582,11 +582,12 @@ func (self *OFSwitch) ResumePacket(pktIn *PacketIn) error {
 	}
 	matchProp.Length = matchProp.Len()
 	continueProp := &openflow15.PacketIn2PropContinuation{
-		Continuation: pktIn.Continuation,
+		Continuation: make([]byte, len(pktIn.Continuation)),
 		PropHeader: &openflow15.PropHeader{
 			Type: openflow15.NXPINT_CONTINUATION,
 		},
 	}
+	copy(continueProp.Continuation, pktIn.Continuation)
 	continueProp.Length = continueProp.Len()
 	resumeProps = append(resumeProps, packetProp, cookieProp, bufferProp, tableProp, reasonProp, matchProp, continueProp)
 	resumeMsg := openflow15.NewResume(resumeProps)

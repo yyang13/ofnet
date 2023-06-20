@@ -62,9 +62,11 @@ func parsePacktInFromNXPacketIn2(pktIn2 *openflow15.PacketIn2) *PacketIn {
 				Fields: v.Fields,
 			}
 		case *openflow15.PacketIn2PropUserdata:
-			userData = v.Userdata
+			userData = make([]byte, len(v.Userdata))
+			copy(userData, v.Userdata)
 		case *openflow15.PacketIn2PropContinuation:
-			continuation = v.Continuation
+			continuation = make([]byte, len(v.Continuation))
+			copy(continuation, v.Continuation)
 		}
 	}
 	return &PacketIn{
