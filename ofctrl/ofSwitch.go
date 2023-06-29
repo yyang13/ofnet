@@ -339,16 +339,19 @@ func (self *OFSwitch) handleMessages(dpid net.HardwareAddr, msg util.Message) {
 
 	case *openflow15.MultipartReply:
 		log.Debugf("Received MultipartReply")
-		rep := (*openflow15.MultipartReply)(t)
-		if self.monitorEnabled {
-			key := fmt.Sprintf("%d", rep.Xid)
+		switch t.Type {
+		case openflow15.MultipartType_FlowDesc:
+			key := fmt.Sprintf("%d", t.Xid)
 			replyChan, found := monitoredFlows.Get(key)
 			if found {
-				replyChan <- rep
+				if self.monitorEnabled {
+					replyChan <- t
+				}
+				monitoredFlows.Remove(key)
 			}
 		}
 		// send packet rcvd callback
-		self.app.MultipartReply(self, rep)
+		self.app.MultipartReply(self, t)
 	case *openflow15.VendorError:
 		errData := t.ErrorMsg.Data.Bytes()
 		result := MessageResult{
@@ -437,18 +440,14 @@ func (self *OFSwitch) DumpFlowStats(cookieID uint64, cookieMask *uint64, flowMat
 	select {
 	case reply := <-replyChan:
 		flowStates := make([]*openflow15.FlowDesc, 0)
-		if reply.Type == openflow15.MultipartType_FlowDesc {
-			flowArr := reply.Body
-			for _, entry := range flowArr {
-				flowStates = append(flowStates, entry.(*openflow15.FlowDesc))
-			}
-			return flowStates, nil
+		flowArr := reply.Body
+		for _, entry := range flowArr {
+			flowStates = append(flowStates, entry.(*openflow15.FlowDesc))
 		}
-
+		return flowStates, nil
 	case <-time.After(2 * time.Second):
 		return nil, errors.New("timeout to wait for MultipartReply message")
 	}
-	return nil, nil
 }
 
 func (self *OFSwitch) CheckStatus(timeout time.Duration) bool {
