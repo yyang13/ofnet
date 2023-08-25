@@ -1,6 +1,6 @@
 module antrea.io/ofnet
 
-go 1.19
+go 1.21
 
 require (
 	antrea.io/libOpenflow v0.12.1
