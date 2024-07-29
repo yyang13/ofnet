@@ -1,4 +1,4 @@
-module antrea.io/ofnet
+module github.com/yyang13/ofnet
 
 go 1.21
 
