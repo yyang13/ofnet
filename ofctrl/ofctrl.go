@@ -138,7 +138,8 @@ type Controller struct {
 func NewController(app AppInterface) *Controller {
 	c := new(Controller)
 	c.connectMode = ServerMode
-	c.id = uint16(rand.Uint32()) // #nosec G404: random number generator not used for security purposes
+	//c.id = uint16(rand.Uint32()) // #nosec G404: random number generator not used for security purposes
+	c.id = 0
 
 	// for debug logs
 	// log.SetLevel(log.DebugLevel)
