@@ -19,7 +19,7 @@ package ofctrl
 
 import (
 	"fmt"
-	"math/rand"
+	//"math/rand"
 	"net"
 	"strings"
 	"sync"
